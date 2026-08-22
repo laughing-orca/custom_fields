@@ -1,0 +1,12 @@
+*.gem
+*.rbc
+/.bundle/
+/.yardoc
+/_yardoc/
+/coverage/
+/doc/
+/pkg/
+/tmp/
+/.ruby-lsp/
+Gemfile.lock
+demo/*.log
