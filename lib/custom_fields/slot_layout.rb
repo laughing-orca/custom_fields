@@ -59,13 +59,13 @@ module CustomFields
 
         sorted_instance_ids.each do |instance_id|
           slots = slots_by_instance_id[instance_id] || {}
-          if store_slots.all? { |slot| (slots[slot] || slots[slot.to_sym]).nil? }
+          if store_slots.all? { |slot| slots[slot.to_s].nil? }
             empty_ids << instance_id
             next
           end
 
           row = { "instance_id" => instance_id }
-          store_slots.each { |slot| row[slot] = slots[slot] || slots[slot.to_sym] }
+          store_slots.each { |slot| row[slot] = slots[slot.to_s] }
           rows << row
         end
 

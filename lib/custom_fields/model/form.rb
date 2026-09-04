@@ -89,8 +89,35 @@ module CustomFields
 
       def cached_fields(version)
         Rails.cache.fetch([cache_key_with_version, "fields", version]) do
-          fields_at(version).map(&:to_cached)
+          cached_list = fields_at(version).map(&:to_cached)
+          order_fields_parent_first(cached_list)
         end
+      end
+
+      def order_fields_parent_first(fields)
+        root_id = ChoiceEditor::ROOT_PARENT_ID
+        children_by_parent = Hash.new { |h, k| h[k] = [] }
+
+        fields.each do |f|
+          parent_id = f.respond_to?(:depends_on_field_id) ? f.depends_on_field_id.to_i : root_id
+          children_by_parent[parent_id] << f
+        end
+
+        ordered = []
+        visited = Set.new
+
+        traverse = lambda do |parent_id|
+          children_by_parent[parent_id].each do |field|
+            next if visited.include?(field.id)
+
+            visited.add(field.id)
+            ordered << field
+            traverse.call(field.id)
+          end
+        end
+
+        traverse.call(root_id)
+        ordered + fields.reject { |f| visited.include?(f.id) }
       end
 
       def min_retained_form_version

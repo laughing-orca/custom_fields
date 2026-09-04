@@ -2,106 +2,90 @@ module CustomFields
   class ChoiceValidator
     ROOT = ChoiceEditor::ROOT_PARENT_ID
 
-    def initialize(fields, choice_class)
+    def initialize(fields, choice_class, choices_cache: nil)
       @by_id = fields.index_by(&:id)
-      @choice_fields_by_name = @by_id.values.select(&:has_choices).to_h { |f| [f.name, f] }
+      
+      @ordered_choice_fields = fields.select(&:has_choices)
+      @choice_fields_by_name = @ordered_choice_fields.index_by(&:name)
 
-      @choices = Hash.new do |cache, field_id|
+      @choices = choices_cache || Hash.new do |cache, field_id|
+        field = @by_id[field_id]
         list = choice_class.cached_choices(field_id)
-        cache[field_id] = {
-          by_value: list.to_h { |choice| [[choice.parent_id.to_i, choice.value.to_s], choice] },
-          by_id: list.to_h { |choice| [[choice.parent_id.to_i, choice.id], choice] },
-        }
+
+        cache[field_id] = list.to_h do |choice|
+          [[choice.parent_id.to_i, field.match_value(choice).to_s], choice]
+        end
       end
     end
 
     def validate(submitted, carried)
-      @submitted = submitted
-      @carried = carried
-      @choice_memo = {}
-      @errors = {}
-      resolved = {}
-
-      @submitted.each do |name, value|
-        resolved[name] = value unless @choice_fields_by_name.key?(name)
-      end
-
-      @choice_fields_by_name.each do |name, field|
-        next unless @submitted.key?(name) || @carried.key?(name)
-
-        choice = resolve(field)
-        resolved[name] = choice ? field.match_value(choice) : nil
-      end
-
-      [@carried.merge(resolved), @errors]
+      cleaned_carried, _ = resolve_all(carried, collect_errors: false)
+      input = cleaned_carried.merge(submitted)
+      resolve_all(input, collect_errors: true)
     end
 
     private
 
-    def resolve(field)
-      return @choice_memo[field.name] if @choice_memo.key?(field.name)
+    def resolve_all(data, collect_errors:)
+      resolved_data = {}
+      resolved_choices = {}
+      errors = {}
 
-      @choice_memo[field.name] = nil
-      return if effective_nil?(field.name)
+      data.each do |name, value|
+        resolved_data[name] = value unless @choice_fields_by_name.key?(name)
+      end
 
-      parent_choice_id = parent_choice_id(field)
-      return if parent_choice_id.nil?
+      @ordered_choice_fields.each do |field|
+        next unless data.key?(field.name)
 
-      @choice_memo[field.name] = find_choice(field, parent_choice_id)
+        raw_val = data[field.name]
+        if raw_val.nil?
+          resolved_data[field.name] = nil
+          next
+        end
+
+        parent_choice_id = determine_parent_choice_id(field, resolved_choices, errors, collect_errors)
+        unless parent_choice_id
+          resolved_data[field.name] = nil
+          next
+        end
+
+        choice = @choices[field.id][[parent_choice_id, raw_val.to_s]]
+
+        if choice
+          resolved_choices[field.id] = choice
+          resolved_data[field.name] = field.match_value(choice)
+        else
+          resolved_data[field.name] = nil
+          add_error(errors, field.name, "choice was not found", collect_errors)
+        end
+      end
+
+      [resolved_data, errors]
     end
 
-    def parent_choice_id(field)
-      depends_on_field_id = field.depends_on_field_id.to_i
-      return ROOT if depends_on_field_id == ROOT
+    def determine_parent_choice_id(field, resolved_choices, errors, collect_errors)
+      depends_on_id = field.depends_on_field_id.to_i
+      return ROOT if depends_on_id == ROOT
 
-      parent_field = @by_id[depends_on_field_id]
-      unless parent_field&.has_choices
-        error_if_submitted(field, "depends on field was not found")
+      parent_field = @by_id[depends_on_id]
+      unless parent_field && parent_field.has_choices
+        add_error(errors, field.name, "depends on field was not found", collect_errors)
         return
       end
 
-      parent_choice = resolve(parent_field)
+      parent_choice = resolved_choices[parent_field.id]
       unless parent_choice
-        error_if_submitted(field, "parent choice was not found")
+        add_error(errors, field.name, "parent choice was not found", collect_errors)
         return
       end
 
       parent_choice.id
     end
 
-    def find_choice(field, parent_choice_id)
-      key, value =
-        if @submitted.key?(field.name)
-          [:by_value, @submitted[field.name].to_s]
-        elsif field.match_type == :id
-          [:by_id, @carried[field.name].to_i]
-        else
-          [:by_value, @carried[field.name].to_s]
-        end
-
-      choice = @choices[field.id][key][[parent_choice_id, value]]
-      error_if_submitted(field, "choice was not found") unless choice
-      choice
-    end
-
-    def error_if_submitted(field, message)
-      add_error(field.name, "E002", message) if submitted_value?(field.name)
-    end
-
-    def submitted_value?(field_name)
-      @submitted.key?(field_name) && !@submitted[field_name].nil?
-    end
-
-    def effective_nil?(field_name)
-      if @submitted.key?(field_name)
-        @submitted[field_name].nil?
-      else
-        @carried[field_name].nil?
-      end
-    end
-
-    def add_error(field_name, code, message)
-      @errors[field_name] ||= [code, message]
+    def add_error(errors, field_name, message, collect_errors)
+      return unless collect_errors
+      errors[field_name] ||= ["E002", message]
     end
   end
 end
